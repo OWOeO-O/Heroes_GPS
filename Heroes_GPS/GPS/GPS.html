@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>카카오 지도 경로 표시</title>
+  <link rel="stylesheet" href="GPS.css">
+  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=118695f495d4d82830112a933348c3f6&libraries=services"></script>
+  <ul id = "csvform"></ul>
+  <script> const ul = document.getElementById('csvform');</script>
+</head>
+<body>
+  <div id="map" style="width:80%; height:500px;"></div>
+  <form id="csvForm">
+    <input type="file" id="csvFileInput" accept=".csv"> <!-- ID 수정 -->
+    <br/>
+    <input type="submit" value="submit">
+  </form>
+  <pre id="output"></pre>
+  
+  <script src="GPS.js"></script>
+</body>
+</html>
