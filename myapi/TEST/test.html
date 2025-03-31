@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Data Analysis</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f7fc;
+            margin: 0;
+            padding: 0;
+            color: #333;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 30px;
+            background-color: #fff;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease-in-out;
+        }
+
+        h2.title {
+            text-align: center;
+            font-size: 32px;
+            margin-bottom: 25px;
+            color: #2c3e50;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+
+        th, td {
+            padding: 18px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 16px;
+        }
+
+        th {
+            background-color: #007BFF;
+            color: #fff;
+            font-weight: bold;
+        }
+
+        td {
+            background-color: #f9f9f9;
+            color: #555;
+            border-radius: 8px;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f1f1f1;
+        }
+
+        tr:hover {
+            background-color: #e7f1ff;
+        }
+
+        .search-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .search-bar input {
+            padding: 12px 18px;
+            font-size: 16px;
+            width: 250px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            outline: none;
+        }
+
+        .search-bar button {
+            padding: 12px 20px;
+            font-size: 16px;
+            background-color: #007BFF;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        .search-bar button:hover {
+            background-color: #0056b3;
+        }
+
+        .loading {
+            text-align: center;
+            font-size: 18px;
+            color: #007BFF;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 class="title">GPS Data Analysis</h2>
+
+    <div class="search-bar">
+        <input type="text" class="search-input" id="searchInput" placeholder="Search by Subject No..." />
+        <button class="search-button" onclick="filterTable()">Search</button>
+    </div>
+
+    <div class="loading" id="loading" style="display: none;">Loading data...</div>
+
+    <table id="data-table">
+        <thead>
+            <tr>
+                <th>Subject No</th>
+                <th>Display No</th>
+                <th>Initial Name</th>
+                <th>Total Distance (km)</th>
+                <th>Unique Dates</th>
+                <th>Average Distance per Day (km)</th>
+                <th>Home Location (Lat/Lon)</th>
+                <th>Weekend Outing Count</th>
+                <th>Total Weekend Outing Time (min)</th>
+                <th>Stay Locations (Lat/Lon)</th>
+                <th>Movement Pattern</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- 데이터가 여기에 동적으로 삽입됩니다 -->
+        </tbody>
+    </table>
+</div>
+
+<script>
+    let globalData = [];  // 데이터를 전역으로 저장
+
+    // 장소 카테고리 아이콘 객체
+    const categoryIcons = {
+        "MT1": "/img/gps/mart.png", // 대형마트
+        "CS2": "/img/gps/convenience.png", // 편의점
+        "PS3": "/img/gps/kindergarten.png", // 어린이집, 유치원
+        "SC4": "/img/gps/school.png", // 학교
+        "AC5": "/img/gps/academy.png", // 학원
+        "PK6": "/img/gps/parking.png", // 주차장
+        "OL7": "/img/gps/gas_station.png", // 주유소, 충전소
+        "SW8": "/img/gps/subway.png", // 지하철역
+        "BK9": "/img/gps/bank.png", // 은행
+        "CT1": "/img/gps/culture.png", // 문화시설
+        "PO3": "/img/gps/public_office.png", // 공공기관
+        "AT4": "/img/gps/tourist.png", // 관광명소
+        "AD5": "/img/gps/hotel.png", // 숙박
+        "FD6": "/img/gps/restaurant.png", // 음식점
+        "CE7": "/img/gps/cafe.png", // 카페
+        "HP8": "/img/gps/hospital.png", // 병원
+        "PM9": "/img/gps/pharmacy.png", // 약국
+        "아파트": "/img/gps/apartment.png", // 아파트
+    };
+
+    async function getGpsData() {
+        try {
+            document.getElementById("loading").style.display = "block";  // 로딩 화면 표시
+            const response = await fetch('http://127.0.0.1:8001/gps-data');  // FastAPI 서버 주소에 맞게 변경
+            const data = await response.json();  // 응답을 JSON 형식으로 파싱
+
+            globalData = data.result;  // API에서 반환되는 전체 데이터를 저장
+            populateTable(globalData);  // 테이블에 데이터 삽입
+
+            document.getElementById("loading").style.display = "none";  // 로딩 화면 숨기기
+        } catch (error) {
+            console.error("Error fetching GPS data:", error);
+            document.getElementById("loading").innerText = "Error!!";
+        }
+    }
+
+    async function getPlaceCategory(latitude, longitude) {
+        const url = `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${longitude}&y=${latitude}`;
+        const response = await fetch(url, {
+            headers: {
+                Authorization: 'KakaoAK YOUR_REST_API_KEY',  // Kakao REST API 키
+            }
+        });
+        const data = await response.json();
+        // 카테고리와 함께 해당 장소 반환
+        return data.documents[0] ? data.documents[0].region_1depth_name : 'Unknown Category';
+    }
+
+    function populateTable(data) {
+        const tableBody = document.getElementById("data-table").getElementsByTagName("tbody")[0];
+        tableBody.innerHTML = "";  // 기존 테이블 내용 비우기
+
+        data.forEach(async (item) => {
+            const row = tableBody.insertRow();  // 새로운 행 추가
+
+            row.insertCell(0).textContent = item.subject_no || " ";  // Subject No
+            row.insertCell(1).textContent = item.display_no || " ";  // Display No
+            row.insertCell(2).textContent = item.initial_name || " ";  // Initial Name
+            row.insertCell(3).textContent = item.total_distance.toFixed(2);  // Total Distance
+            row.insertCell(4).textContent = item.unique_dates || " 0 ";  // Unique Dates
+            row.insertCell(5).textContent = item.average_distance_per_day.toFixed(2);  // Avg Distance per Day
+            row.insertCell(6).textContent = `Lat: ${item.home_location[0]}, Lon: ${item.home_location[1]}`;  // Home Location
+            row.insertCell(7).textContent = item.holiday_outing_count || " 0 ";  // Holiday Outing Count
+            row.insertCell(8).textContent = item.total_holiday_outing_time || " 0 ";  // Total Outing Time
+
+        // Stay Locations - 카테고리 명칭과 방문 횟수만 표시
+
+            const stayLocationsHTML = await Promise.all(item.stay_locations.map(async (loc) => {
+                const category = await getPlaceCategory(loc.latitude, loc.longitude);  // 카테고리 명칭을 가져옴
+                const visitCount = loc.visit_count;  // 방문 횟수
+                return `<span title="${category}">${category}: ${visitCount} visits</span>`;  // 카테고리 명칭과 방문 횟수 표시
+}));           row.insertCell(9).innerHTML = stayLocationsHTML.join(' ') || " X ";  // Stay Locations with category names and visit counts
+
+              row.insertCell(10).textContent = `Regular Hours: ${item.movement_pattern.regular_hours.join(', ')}`;  // Movement Pattern
+        });
+    }
+
+    function filterTable() {
+        const searchValue = document.getElementById("searchInput").value.toLowerCase();
+        const filteredData = globalData.filter(item => item.subject_no.toString().includes(searchValue));
+        populateTable(filteredData);
+    }
+
+    window.onload = async function() {
+        await getGpsData();
+    };
+</script>
+
+</body>
+</html>
