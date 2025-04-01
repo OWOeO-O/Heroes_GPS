@@ -8,6 +8,10 @@ from math import radians, sin, cos, sqrt, atan2
 from datetime import datetime, timedelta
 import pymysql
 from concurrent.futures import ProcessPoolExecutor
+import requests
+#
+# KAKAO_API_KEY ='5da0a8d703e9ce95613b74b7e10fb2fa'
+
 
 # FastAPI 앱 설정
 app = FastAPI()
@@ -20,7 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# DB 연결 URL 설정
+# DB 연결
 DATABASE_URL = "mysql+pymysql://select-user:select-mega@rds-mysql-mindheal.cgufe5mhgrbk.ap-northeast-2.rds.amazonaws.com/heroes"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -35,14 +39,12 @@ class GpsData(Base):
     latitude = Column(Float)
     longitude = Column(Float)
 
-
 # Subject 테이블 정의 (조인 사용을 위해 추가)
 class Subject(Base):
     __tablename__ = 'subject'
     no = Column(Integer, primary_key=True, index=True)
     display_no = Column(String)
     initial_name = Column(String)  # initial_name 추가
-
 
 # DB 세션 생성
 def get_db():
@@ -52,14 +54,12 @@ def get_db():
     finally:
         db.close()
 
-
-# 기본 엔드포인트 추가
+# 기본 endpoint 추가
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the FastAPI application!"}
 
-
-# 하버사인 공식 (거리 계산)
+# haversine 공식 (거리 계산)
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371  # 지구 반지름 (km)
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
@@ -70,7 +70,7 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c  # 거리 (km)
 
 
-# DB에서 GPS 데이터 가져오기 (Subject 테이블과 조인)
+# DB 서 GPS 데이터 (Subject 테이블 조인)
 def get_gps_data_with_display_no(db: Session, subject_no: int):
     gps_data = db.query(
         GpsData.subject_no, GpsData.collected_time, GpsData.latitude, GpsData.longitude,
@@ -81,20 +81,25 @@ def get_gps_data_with_display_no(db: Session, subject_no: int):
         .all()
     return gps_data
 
-
-# 집 위치 추정 (가장 많이 머문 장소)
+# 집 위치 추정 (오후 10시 이후, 가장 많이 머문 장소)
 def get_home_location(df):
-    home_location = df.groupby(['latitude', 'longitude']).size().idxmax()
-    return home_location
+    # 10시 이후의 데이터 필터링
+    df_filtered = df[df['collected_time'].dt.hour >= 22]
 
+    # 10시 이후에 가장 많이 머문 장소 찾기
+    if not df_filtered.empty:
+        home_location = df_filtered.groupby(['latitude', 'longitude']).size().idxmax()
+        return home_location
+    else:
+        return None  # 10시 이후 데이터 없을 경우 None 반환
 
-# 공휴일 고려한 휴일 외출 횟수 및 시간 계산
+# 주말: *휴일은 주말로 가정.
 def calculate_holiday_outing(df):
     df['date'] = df['collected_time'].dt.date
     df['weekday'] = df['collected_time'].dt.weekday
     holidays = df[df['weekday'] >= 5]  # 토요일, 일요일 필터링
     outing_count = holidays['date'].nunique()
-    total_outing_time = holidays.shape[0] * 5  # 5분을 기본 휴일 외출 시간으로 가정
+    total_outing_time = holidays.shape[0] * 5  # 5분을 기본 주말 외출 시간 가정
     return outing_count, total_outing_time
 
 
@@ -105,20 +110,20 @@ def get_stay_locations(df):
     # 3분 이상 머문 장소만 필터링
     stays = df[df['time_diff'] >= 180]
 
-    # 각 장소에서의 방문 횟수 및 총 머문 시간 계산
+    # 각 장소 서 방문 횟수 및 총 머문 시간 계산
     stay_locations = stays.groupby(['latitude', 'longitude']).agg(
         total_time=('time_diff', 'sum'),
         visit_count=('latitude', 'count')
     ).reset_index()
 
-    # 방문 횟수 및 머문 시간 기준으로 정렬 (가장 많이 방문한 장소부터)
+    # 방문 횟수 및 머문 시간 기준 정렬 (가장 많이 방문한 장소~)
     stay_locations = stay_locations.sort_values(by=['visit_count', 'total_time'], ascending=False)
 
     return stay_locations.to_dict(orient='records')
 
 
-# 유사한 좌표 기준으로 중복 제거 (좌표 차이로 유사 장소를 묶기)
-def group_similar_locations(stay_locations, threshold=0.0005):
+# 유사한 좌표 기준 중복 제거 (좌표 차이로 유사 장소 묶기)
+def group_similar_locations(stay_locations, threshold=0.02):
     grouped = []
     for loc in stay_locations:
         added = False
@@ -133,26 +138,34 @@ def group_similar_locations(stay_locations, threshold=0.0005):
             grouped.append([loc])
     return grouped
 
-
-# 이동 시간 규칙성 분석 및 regular_hours 방문 위치 반환 (개선)
+# 이동 시간 규칙성 분석 및 regular_hours - 30분 단위 방문 위치 반환
 def analyze_movement_pattern(df):
-    df['hour'] = df['collected_time'].dt.hour
+    #  30분 단위로 그룹화 (0~23시간 + 0~30분 / 30~59분)
+    df['half_hour'] = df['collected_time'].dt.hour * 2 + (df['collected_time'].dt.minute >= 30).astype(int)
 
-    # 시간대별 방문 횟수를 계산
-    movement_pattern = df.groupby(['hour', 'latitude', 'longitude']).size().reset_index(name='visit_count')
+    #  30분 단위 방문 횟수 계산 ( visit_count >= 3 필터 적용)
+    movement_pattern = df.groupby(['half_hour', 'latitude', 'longitude']).size().reset_index(name='visit_count')
+    movement_pattern = movement_pattern[movement_pattern['visit_count'] >= 3]  # 여기서 미리 필터링! -> 데이터 너무 많지 않게 처리
 
-    # 방문 횟수가 5번 이상인 시간대와 장소만 추출
-    regular_hours = movement_pattern[movement_pattern['visit_count'] >= 5]['hour'].tolist()
+    #  방문 횟수가 3번 이상인 시간대, 장소 추출
+    regular_hours = movement_pattern['half_hour'].unique().tolist()
 
-    # 5번 이상 방문한 장소들만 선택
-    frequent_locations = movement_pattern[movement_pattern['visit_count'] >= 5].to_dict(orient='records')
+    #  3번 이상 방문한 장소만 리스트 반환
+    frequent_locations = movement_pattern.to_dict(orient='records')
+
+    #  빈 리스트 방지 (기본값 설정)
+    if movement_pattern.empty:
+        return {
+            "movement_pattern": [ 1 ],
+            "regular_hours": [ 1 ],
+            "regular_hours_locations": [ 1 ]
+        }
 
     return {
         "movement_pattern": movement_pattern.to_dict(orient='records'),
         "regular_hours": regular_hours,
         "regular_hours_locations": frequent_locations
     }
-
 
 # 개별 subject_no 처리
 def process_subject(subject_no):
@@ -163,7 +176,7 @@ def process_subject(subject_no):
                                'initial_name'])  # initial_name 추가
 
     if df.empty:
-        return None  # 데이터가 없는 경우 처리
+        return None  # 데이터 없는 경우 처리
 
     df['collected_time'] = pd.to_datetime(df['collected_time'])
 
@@ -191,7 +204,7 @@ def process_subject(subject_no):
     outing_count = outing_count if outing_count is not None else ""
     total_outing_time = total_outing_time if total_outing_time is not None else ""
 
-    # Stay locations과 Movement pattern에 대해 빈 값 처리
+    # Stay locations, Movement pattern 대해 빈 값 처리
     stay_locations = stay_locations if stay_locations else []
     movement_pattern_data = movement_pattern.get("movement_pattern", [])
     regular_hours_locations = movement_pattern.get("regular_hours_locations", [])
@@ -206,7 +219,7 @@ def process_subject(subject_no):
         "home_location": home_location,
         "holiday_outing_count": outing_count,
         "total_holiday_outing_time": total_outing_time,
-        "stay_locations": stay_locations_grouped,  # 유사한 장소 그룹화된 리스트
+        "stay_locations": stay_locations_grouped,  # 유사한 장소 그룹화 리스트
         "movement_pattern": movement_pattern_data,
         "regular_hours_locations": regular_hours_locations
     }
@@ -218,7 +231,13 @@ def get_processed_gps_data(db: Session = Depends(get_db)):
     subjects = db.query(GpsData.subject_no).distinct().all()
     subject_nos = [subject[0] for subject in subjects]
 
-    with ProcessPoolExecutor() as executor:
-        results = list(executor.map(process_subject, subject_nos))
+    results = list(map(process_subject, subject_nos))
+    return {"result": results}
 
-    return {"result": [res for res in results if res is not None]}
+        # with ProcessPoolExecutor() as executor:
+    # Stay Locations 좌표를 카카오 API 통해 category 코드로 변환
+    # for res in results:
+    #     if res is not None:
+    #         res["stay_locations"] = update_stay_locations_with_category(res["stay_locations"])
+    #
+    # return {"result": [res for res in results if res is not None]}
