@@ -176,9 +176,20 @@
             row.insertCell(6).textContent = `Lat: ${item.home_location[0]}, Lon: ${item.home_location[1]}`;  // Home Location
             row.insertCell(7).textContent = item.holiday_outing_count || " 0 ";  // Holiday Outing Count
             row.insertCell(8).textContent = item.total_holiday_outing_time || " 0 ";  // Total Outing Time
-            row.insertCell(9).textContent = item.stay_locations || " X "; // stay_locations  
-            row.insertCell(10).textContent = `Regular Hours:${item.movement_pattern.map(m => `(${m.latitude}, ${m.longitude})`).join(', ')}`;  // Movement Pattern 
-        });
+            row.insertCell(9).textContent = (item.stay_locations && Array.isArray(item.stay_locations))
+            ? item.stay_locations.flat()  // 이중 배열이 있다면 평탄화
+                .filter(loc => loc.visit_count >= 1)  // 방문 횟수 2 이상만 필터링
+                .map(loc => `${loc.category_name || "Unknown"} - 머문 시간: ${Math.floor(loc.total_time / 60)} 위치: "${loc.latitude}, ${loc.longitude}"`)
+                .join(', ')
+            : "0";
+        
+     //       row.insertCell(10).textContent = Array.isArray(movement_pattern)
+       //     ? movementData
+         //       .map(m => `${m.category_name || "Unknown"} - ${Math.floor(m.total_time / 60)}분 위치: "${m.latitude}, ${m.longitude}"`)
+           //     .join(', ')
+           // : "0";
+            
+          });
     }
 
     function filterTable() {

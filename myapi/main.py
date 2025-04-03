@@ -8,17 +8,18 @@ import pandas as pd
 from math import radians, sin, cos, sqrt, atan2
 import requests
 from dotenv import load_dotenv
-import time
+
 
 load_dotenv()
 
-# 환경변수에서 API 키 로드
+# API 키 로드
 KAKAO_API_KEY = os.getenv("KAKAO_API_KEY")
 KAKAO_API_URL = "https://dapi.kakao.com/v2/local/search/category.json"
 KAKAO_COORD_URL = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
-
 # 요청 헤더
-HEADERS = {"Authorization": f"KakaoAK 5da0a8d703e9ce95613b74b7e10fb2fa"}
+
+HEADERS = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
+
 
 # FastAPI 설정
 app = FastAPI()
@@ -39,7 +40,6 @@ Base = declarative_base()
 # GPS 데이터 모델
 table_name = 'subject_gps'
 
-
 class GpsData(Base):
     __tablename__ = table_name
     subject_no = Column(Integer, primary_key=True, index=True)
@@ -47,10 +47,8 @@ class GpsData(Base):
     latitude = Column(Float)
     longitude = Column(Float)
 
-
 # Subject 테이블
 table_subject = 'subject'
-
 
 class Subject(Base):
     __tablename__ = table_subject
@@ -67,7 +65,6 @@ def get_db():
     finally:
         db.close()
 
-
 def get_kakao_place_info(latitude, longitude):
     url = "https://dapi.kakao.com/v2/local/search/category.json"
     headers = {"Authorization": f"KakaoAK 5da0a8d703e9ce95613b74b7e10fb2fa"}
@@ -78,7 +75,6 @@ def get_kakao_place_info(latitude, longitude):
         "radius": 50,  # 반경 50m 내 검색
         "sort": "distance"
     }
-
     response = requests.get(url, headers=headers, params=params)
 
     if response.status_code == 200:
@@ -87,7 +83,6 @@ def get_kakao_place_info(latitude, longitude):
                 for place in places]
     else:
         return []
-
 
 # 좌표 → 주소 변환 (movement pattern, regular hours locations에 적용)
 def get_address_from_coordinates(lat, lng):
@@ -106,20 +101,17 @@ def get_address_from_coordinates(lat, lng):
 
     return "UNKNOWN"
 
-
 # Stay Locations 카테고리 변환
 def update_stay_locations_with_category(stay_locations):
     for location in stay_locations:
-        location["category"] = get_location_category(location["latitude"], location["longitude"])
+        location["category"] = fetch_kakao_category(location["latitude"], location["longitude"])
     return stay_locations
-
 
 # Movement pattern 및 regular hours 좌표 → 장소명(주소) 변환
 def update_locations_with_address(locations):
     for location in locations:
         location["address"] = get_address_from_coordinates(location["latitude"], location["longitude"])
     return locations
-
 
 # 개별 subject_no 처리 (좌표 변환 적용)
 def process_subject(subject_no):
@@ -164,7 +156,6 @@ def process_subject(subject_no):
         "regular_hours_locations": regular_hours_locations  # 주소 변환된 데이터
     }
 
-
 # GPS 데이터 조회
 def get_gps_data_with_display_no(db: Session, subject_no: int):
     return db.query(
@@ -185,10 +176,8 @@ def get_stay_locations(df):
         visit_count=('latitude', 'count')
     ).reset_index()
 
-    # 각 좌표의 category 조회
-    stay_locations["category"] = stay_locations.apply(
-        lambda row: get_location_category(row["latitude"], row["longitude"]), axis=1
-    )
+    # 각 좌표 category 조회
+    stay_locations["category"] = [fetch_kakao_category(lat, lon) for lat, lon in zip(stay_locations["latitude"], stay_locations["longitude"])]
 
     return stay_locations.to_dict(orient='records')
 
@@ -203,7 +192,6 @@ def process_subject(subject_no):
         return None
 
     df['collected_time'] = pd.to_datetime(df['collected_time'])
-
     stay_locations = get_stay_locations(df)
 
     return {
@@ -212,7 +200,6 @@ def process_subject(subject_no):
         "initial_name": df['initial_name'].iloc[0],
         "stay_locations": stay_locations
     }
-
 
 # 기본 endpoint 추가
 @app.get("/")
@@ -242,15 +229,12 @@ def get_gps_data_with_display_no(db: Session, subject_no: int):
 
 # 집 위치 추정 (오후 10시 이후, 가장 많이 머문 장소)
 def get_home_location(df):
-    # 10시 이후의 데이터 필터링
-    df_filtered = df[df['collected_time'].dt.hour >= 22]
-
     # 10시 이후에 가장 많이 머문 장소 찾기
-    if not df_filtered.empty:
-        home_location = df_filtered.groupby(['latitude', 'longitude']).size().idxmax()
-        return home_location
-    else:
-        return None  # 10시 이후 데이터 없을 경우 None 반환
+    df_filtered = df[df['collected_time'].dt.hour >= 22]
+    return df_filtered.groupby(['latitude', 'longitude']).size().idxmax() if not df_filtered.empty else None
+
+
+# 10시 이후 데이터 없을 경우 None 반환
 
 # 주말: *휴일은 주말로 가정.
 def calculate_holiday_outing(df):
@@ -297,16 +281,15 @@ def group_similar_locations(stay_locations, threshold=0.02):
 
 def fetch_kakao_place(lat, lon, api_key, radius=50):
     url = f"https://dapi.kakao.com/v2/local/geo/coord2address.json?"
-    headers = {"Authorization": f"KakaoAK 5da0a8d703e9ce95613b74b7e10fb2fa"}
+    headers = {"Authorization": f"KakaoAK {api_key}"}
     params = {
-        "x": lon,
-        "y": lat
+        "x": lon, "y": lat
     }
     response = requests.get(url, headers=headers, params=params)
     if response.status_code == 200:
         result = response.json()
-        if result['documents']:
-            return result['documents'][0].get("category_group_code", "Unknown")
+        if result.get("documents"):
+            return result["documents"][0].get("address", {}).get("address_name", "Unknown")
     else:
         print(f"Error {response.status_code}: {response.text}")  # 에러 로그 추가
     return "Unknown"
@@ -332,94 +315,96 @@ CATEGORY_MAP = {
     "PM9": "약국"
 }
 
-def fetch_kakao_category(lat, lon, api_key, radius=50,max_retries=5):
+def fetch_kakao_category(lat, lon, api_key, radius=50):
     """좌표를 기반으로 카카오 카테고리 코드 조회"""
     url = "https://dapi.kakao.com/v2/local/search/category.json"
     headers = {"Authorization": f"KakaoAK {api_key}"}
     category_codes = ["MT1", "CS2", "PS3", "SC4", "AC5", "PK6", "OL7", "SW8", "BK9", "CT1",
                       "AG2", "PO3", "AT4", "AD5", "FD6", "CE7", "HP8", "PM9"]  # 🔥 카테고리 리스트
 
-    nearest_place = None
-    min_distance = float('inf')
+    nearest_place = None  # 가장 가까운 장소 저장
+    min_distance = float('inf')  # 최소 거리 초기값 (무한대)
 
-    for category in category_codes:
+    for category in category_codes:  # ✅ 모든 카테고리 조회
         params = {"x": lon, "y": lat, "radius": radius, "category_group_code": category}
+        response = requests.get(url, headers=headers, params=params, timeout=5)
 
-        for attempt in range(max_retries):  # ✅ 최대 3번 재시도
-            try:
-                response = requests.get(url, headers=headers, params=params, timeout=20)  # ✅ 20초 타임아웃 설정
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("documents"):
+                for place in result["documents"]:  # ✅ 모든 장소 확인
+                    distance_str = place.get("distance", "999999")  # 문자열로 받음
+                    try:
+                        distance = int(distance_str) if distance_str.isdigit() else 999999
+                    except ValueError:
+                        distance = 999999  # 변환 오류 시 기본값 설정
 
-                if response.status_code == 200:
-                    result = response.json()
-                    if result.get("documents"):
-                        for place in result["documents"]:
-                            distance_str = place.get("distance", "999999")
-                            distance = int(distance_str) if distance_str.strip().isdigit() else 999999
+                    if distance < min_distance:  # ✅ 더 가까운 장소 찾기
+                        min_distance = distance
+                        nearest_place = place
+        else:
+            print(response)
 
-                            if distance < min_distance:
-                                min_distance = distance
-                                nearest_place = place
-                    break  # ✅ 성공하면 재시도 종료
-
-                else:
-                    print(f"Error {response.status_code}: {response.text}")
-                    break  # HTTP 에러는 재시도할 필요 없음
-
-            except requests.exceptions.RequestException as e:
-                error_message = f"⚠️ 요청 실패 (시도 {attempt + 1}/{max_retries}): {e}"
-                print(error_message)
-                with open("log.txt", "a") as log_file:
-                    log_file.write(error_message + "\n")
-
-                time.sleep(10)  # ✅ 네트워크 오류 발생 시 10초 대기 후 재시도
-
-            return nearest_place.get("category_group_code", "Unknown")
+    if nearest_place:
+        return nearest_place.get("category_group_code", "Unknown")  # ✅ 가장 가까운 장소의 카테고리 코드 반환
+    # print(f"Error {response.status_code}: {response.text}")
     return "Unknown"
+
+
 
 api_key = "5da0a8d703e9ce95613b74b7e10fb2fa"
 #print(fetch_kakao_place(35.151308917717, 126.85208467134, api_key))
 
 # 이동 시간 규칙성 분석 및 regular_hours - 30분 단위 방문 위치 반환
-def analyze_movement_pattern(df):
+def analyze_category(df):
     flat_list = [item for sublist in df for item in sublist]  # 리스트 내부 리스트 풀기
-    filtered_df = [entry for entry in flat_list if entry['visit_count'] >= 2]
+    top_5 = sorted(flat_list, key=lambda x: x['total_time'], reverse=True)[:5]
+
+
+    #filtered_df = [entry for entry in flat_list if entry['visit_count'] >= 2]
     api_key = '5da0a8d703e9ce95613b74b7e10fb2fa'
     # 카카오 API를 통해 장소 정보 추가
     if api_key:
-        for entry in filtered_df:
+        for entry in top_5:
             category_code = fetch_kakao_category(entry["latitude"], entry["longitude"], api_key)  # 카테고리 코드 가져오기
             entry["category_code"] = category_code  # ✅ 카테고리 코드 추가
             entry["category_name"] = CATEGORY_MAP.get(category_code, "기타")
 
-    return filtered_df
+    return top_5
 
-    # #  30분 단위로 그룹화 (0~23시간 + 0~30분 / 30~59분)
-    # df['half_hour'] = df['collected_time'].dt.hour * 2 + (df['collected_time'].dt.minute >= 30).astype(int)
-    # #  30분 단위 방문 횟수 계산 ( visit_count >= 3 필터 적용)
-    # movement_pattern = df.groupby(['half_hour', 'latitude', 'longitude']).size().reset_index(name='visit_count')
-    # movement_pattern = movement_pattern[movement_pattern[''] >= 3]  # 여기서 미리 필터링! -> 데이터 너무 많지 않게 처리
-    # #  방문 횟수가 3번 이상인 시간대, 장소 추출visit_count
-    # regular_hours = movement_pattern['half_hour'].unique().tolist()
-    # #  3번 이상 방문한 장소만 리스트 반환
-    # frequent_locations = movement_pattern.to_dict(orient='records')
-    #
-    #
-    # #  빈 리스트 방지 (기본값 설정)
-    # if movement_pattern.empty:
-    #     return {
-    #         "movement_pattern": [ 0 ],
-    #         "regular_hours": [ 0 ],
-    #         "regular_hours_locations": [ 0 ]
-    #     }
-    #
-    # return {
-    #     "movement_pattern": movement_pattern.to_dict(orient='records'),
-    #     "regular_hours": regular_hours,
-    #     "regular_hours_locations": frequent_locations
-    # }
+
+
+# 이동 규칙성(특정시간대)
+def analyze_movement_pattern(df):
+    # 30분 단위로 그룹화 (0~23시간 + 0~30분 / 30~59분)
+    df['half_hour'] = df['collected_time'].dt.hour * 2 + (df['collected_time'].dt.minute >= 30).astype(int)
+
+    # 방문 횟수 계산
+    visit_counts = df.groupby(['half_hour', 'latitude', 'longitude']).size().reset_index(name='visit_count')
+
+    # 3번 이상 방문한 장소 필터링
+    movement_pattern = visit_counts[visit_counts['visit_count'] >= 3]
+
+    # 방문한 시간대 및 장소 추출
+    regular_hours = sorted(movement_pattern['half_hour'].unique().tolist())
+    frequent_locations = movement_pattern.to_dict(orient='records')
+
+    #  빈 리스트 방지 (기본값 설정)
+    if movement_pattern.empty:
+        return {
+            "movement_pattern": [],
+            "regular_hours": [],
+            "regular_hours_locations": []
+        }
+
+    return {
+        "movement_pattern": movement_pattern.to_dict(orient='records'),
+        "regular_hours": regular_hours,
+        "regular_hours_locations": frequent_locations
+    }
 
 # 개별 subject_no 처리
-def process_subject(subject_no):
+def process_subject(subject_no, db):
     db = SessionLocal()
     gps_data = get_gps_data_with_display_no(db, subject_no)
     df = pd.DataFrame(gps_data,
@@ -447,7 +432,8 @@ def process_subject(subject_no):
     outing_count, total_outing_time = calculate_holiday_outing(df)
     stay_locations = get_stay_locations(df)
     stay_locations_grouped = group_similar_locations(stay_locations)  # 유사한 장소로 그룹화
-    movement_pattern = analyze_movement_pattern(stay_locations_grouped)
+    stay_locations_category = analyze_category(stay_locations_grouped) # 유사한 장소로 그룹화 카테고리
+    movement_pattern = analyze_movement_pattern(df)
 
     # 빈 값 처리 (None 또는 NaN -> 공백 처리)
     home_location = home_location if home_location is not None else ""
@@ -459,6 +445,15 @@ def process_subject(subject_no):
     # movement_pattern_data = movement_pattern.get("movement_pattern", [])
     # regular_hours_locations = movement_pattern.get("regular_hours_locations", [])
 
+    def main():
+        db = SessionLocal()
+        try:
+            subject_no_list = get_all_subject_nos(db)
+            for subject_no in subject_no_list:
+                process_subject(subject_no, db)
+        finally:
+            db.close()
+
     return {
         "subject_no": subject_no,
         "display_no": df['display_no'].iloc[0],
@@ -469,21 +464,23 @@ def process_subject(subject_no):
         "home_location": home_location,
         "holiday_outing_count": outing_count,
         "total_holiday_outing_time": total_outing_time,
-        "stay_locations": stay_locations_grouped,  # 유사한 장소 그룹화 리스트
+        "stay_locations": stay_locations_category,  # 유사한 장소 그룹화 리스트
         "movement_pattern": movement_pattern
         # "regular_hours_locations": regular_hours_locations
     }
 
 # 병렬 처리 실행
+
+# 병렬 처리 실행
 @app.get("/gps-data")
 def get_processed_gps_data(db: Session = Depends(get_db)):
-    subjects = db.query(GpsData.subject_no).distinct().all()
+    subjects = db.query(GpsData.subject_no).distinct().limit(10).all()
     subject_nos = [subject[0] for subject in subjects]
 
-    results = list(map(process_subject, subject_nos))
-    print({"result":results})
-    return {"result": results}
+    results = [process_subject(subject_no, db) for subject_no in subject_nos]
 
+    # print({"result": results})
+    return {"result": results}
         # with ProcessPoolExecutor() as executor:
     # Stay Locations 좌표를 카카오 API 통해 category 코드로 변환
     # for res in results:
