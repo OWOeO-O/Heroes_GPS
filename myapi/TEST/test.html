@@ -4,106 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GPS Data Analysis</title>
-    <style>
-        body {
-            font-family: 'Arial', sans-serif;
-            background-color: #f4f7fc;
-            margin: 0;
-            padding: 0;
-            color: #333;
-        }
-
-        .container {
-            width: 90%;
-            max-width: 1200px;
-            margin: 40px auto;
-            padding: 30px;
-            background-color: #fff;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease-in-out;
-        }
-
-        h2.title {
-            text-align: center;
-            font-size: 32px;
-            margin-bottom: 25px;
-            color: #2c3e50;
-            font-weight: bold;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 30px;
-        }
-
-        th, td {
-            padding: 18px;
-            text-align: left;
-            border-bottom: 1px solid #e0e0e0;
-            font-size: 16px;
-        }
-
-        th {
-            background-color: #007BFF;
-            color: #fff;
-            font-weight: bold;
-        }
-
-        td {
-            background-color: #f9f9f9;
-            color: #555;
-            border-radius: 8px;
-        }
-
-        tr:nth-child(even) {
-            background-color: #f1f1f1;
-        }
-
-        tr:hover {
-            background-color: #e7f1ff;
-        }
-
-        .search-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .search-bar input {
-            padding: 12px 18px;
-            font-size: 16px;
-            width: 250px;
-            border-radius: 6px;
-            border: 1px solid #ddd;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            outline: none;
-        }
-
-        .search-bar button {
-            padding: 12px 20px;
-            font-size: 16px;
-            background-color: #007BFF;
-            color: #fff;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-        }
-
-        .search-bar button:hover {
-            background-color: #0056b3;
-        }
-
-        .loading {
-            text-align: center;
-            font-size: 18px;
-            color: #007BFF;
-            font-weight: bold;
-        }
-    </style>
+    <link rel="stylesheet" type="text/css" href="test.css">
 </head>
 <body>
 
@@ -111,96 +12,179 @@
     <h2 class="title">GPS Data Analysis</h2>
 
     <div class="search-bar">
-        <input type="text" class="search-input" id="searchInput" placeholder="Search by Subject No..." />
-        <button class="search-button" onclick="filterTable()">Search</button>
+        <input type="text" id="searchInput" placeholder="Search by Subject No..." />
+        <button onclick="filterTable()">Search</button>
     </div>
 
     <div class="loading" id="loading" style="display: none;">Loading data...</div>
-
     <table id="data-table">
         <thead>
             <tr>
-                <th>Subject No</th>
-                <th>Display No</th>
-                <th>Initial Name</th>
-                <th>Total Distance (km)</th>
-                <th>Unique Dates</th>
-                <th>Average Distance per Day (km)</th>
+                <th>Subject No</th>      <th>Display No</th>
+                <th>Initial Name</th>    <th>총 이동거리 (km)</th>
+                <th>날짜 수 <br>(일)</th>
+                <th>[디지털활동반경] <br>(일 별 ) (km)</th>
                 <th>Home Location (Lat/Lon)</th>
-                <th>Weekend Outing Count</th>
-                <th>Total Weekend Outing Time (min)</th>
-                <th>Stay Locations (Lat/Lon)</th>
-                <th>Movement Pattern</th>
+                <th>Weekend Outing Count <br> (* 주말 총 외출 횟수 )</th>
+                <th>Total Weekend Outing Time (min) <br> (* 주말 총 외출 시간)</th>
+                <th>[디지털이동다양성]</th>
+                <th>[디지털이동규칙성]</th>
             </tr>
         </thead>
-        <tbody>
-            <!-- 데이터가 여기에 동적으로 삽입됩니다 -->
-        </tbody>
+        <tbody></tbody>
     </table>
+
+    <div class="pagination" id="pagination"></div>
 </div>
 
 <script>
-    let globalData = [];  // 데이터를 전역으로 저장
+    let currentPage = 1;
+    const rowsPerPage = 10;
+    let totalItems = 0;
+    // let globalData = [];
+    // let currentPage = 1;
+    // const rowsPerPage = 10;
 
     async function getGpsData() {
         try {
-            document.getElementById("loading").style.display = "block";  // 로딩 화면 표시
-            const response = await fetch('http://127.0.0.1:8001/gps-data');  // FastAPI 서버 주소에 맞게 변경
-            const data = await response.json();  // 응답을 JSON 형식으로 파싱
-
-            console.log(data);  // 데이터가 받아졌는지 확인하기 위해 바로 출력
-
-            globalData = data.result;  // API에서 반환되는 전체 데이터를 저장
-            populateTable(globalData);  // 테이블에 데이터 삽입
-
-            document.getElementById("loading").style.display = "none";  // 로딩 화면 숨기기
+            document.getElementById("loading").style.display = "block";
+    
+            const response = await fetch(`http://127.0.0.1:8001/gps-data?limit=${rowsPerPage}&offset=${(currentPage - 1) * rowsPerPage}`);
+            const data = await response.json();
+    
+            globalData = data.result || [];
+            totalItems = data.total_count; // FastAPI에서 총 개수 반환
+    
+            populateTable(globalData);
+            updatePaginationButtons(totalItems);
+            document.getElementById("loading").style.display = "none";
         } catch (error) {
             console.error("Error fetching GPS data:", error);
-            document.getElementById("loading").innerText = "Error!!";
+            document.getElementById("loading").innerText = "데이터를 불러오는 중 오류가 발생했습니다.";
         }
     }
+    
+    function renderLocationList(locations) {
+        if (!locations || !Array.isArray(locations)) return "0";
+        const flatLocations = Array.isArray(locations[0]) ? locations.flat() : locations;
+    
+        const validItems = flatLocations.filter(loc =>
+            typeof loc === 'object' &&
+            loc.latitude !== undefined &&
+            loc.longitude !== undefined &&
+            loc.total_time !== undefined
+        );
+    
+        if (validItems.length === 0) return "0";
+    
+        const categoryData = validItems.reduce((acc, loc) => {
+            const category = loc.category_name || "Unknown";
+            if (!acc[category]) {
+                acc[category] = { totalTime: 0, totalDistance: 0, count: 0, visitDays: new Set() };
+            }
+            acc[category].totalTime += loc.total_time;
+            acc[category].totalDistance += loc.total_distance;
+            acc[category].count += 1;
+            acc[category].visitDays.add(loc.date); 
+            return acc;
+        }, {});
+    
+        // 각 카테고리를 리스트 형태로 표시
+        const categoryDetails = Object.keys(categoryData).map(category => {
+            const { totalTime, totalDistance, count, visitDays } = categoryData[category];
+            const avgDistanceInKm = totalDistance / count; // 하루 평균 이동 거리 계산
+            const distance = avgDistanceInKm.toFixed(2);
+    
+            const avgTimeInMinutes = Math.floor(totalTime / count / 60); // 평균 시간 계산
+            const hours = Math.floor(avgTimeInMinutes / 60);
+            const minutes = avgTimeInMinutes % 60;
+            const time = hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`;
+    
+            const visitDaysCount = visitDays.size;
+    
+            const avgDailyTimeInMinutes = Math.floor(totalTime / visitDaysCount / 60); // 하루 평균 머문 시간 계산
+            const dailyHours = Math.floor(avgDailyTimeInMinutes / 60);
+            const dailyMinutes = avgDailyTimeInMinutes % 60;
+            const dailyTime = dailyHours > 0 ? `${dailyHours}시간 ${dailyMinutes}분` : `${dailyMinutes}분`;
+    
+            return `
+                <li>
+                    <strong>${category}</strong><br>
+                    🕒 평균 시간: ${time}<br>
+                    🔢 방문 횟수: ${count}회<br>
+                    📅 방문 일수: ${visitDaysCount}일<br>
+                    🗓 하루 평균 머문 시간: ${dailyTime} (일 평균)
+                </li>
+            `;
+        }).join('');
+    
+        return `<ul>${categoryDetails}</ul>`;  // 리스트로 감싸기
+    }
+    
 
     function populateTable(data) {
         const tableBody = document.getElementById("data-table").getElementsByTagName("tbody")[0];
-        tableBody.innerHTML = "";  // 기존 테이블 내용 비우기
+        tableBody.innerHTML = "";
 
-        data.forEach(async (item) => {
-            const row = tableBody.insertRow();  // 새로운 행 추가
+        const startIndex = (currentPage - 1) * rowsPerPage;
+        const paginatedData = data.slice(startIndex, startIndex + rowsPerPage);
 
-            row.insertCell(0).textContent = item.subject_no || " ";  // Subject No
-            row.insertCell(1).textContent = item.display_no || " ";  // Display No
-            row.insertCell(2).textContent = item.initial_name || " ";  // Initial Name
-            row.insertCell(3).textContent = item.total_distance.toFixed(2);  // Total Distance
-            row.insertCell(4).textContent = item.unique_dates || " 0 ";  // Unique Dates
-            row.insertCell(5).textContent = item.average_distance_per_day.toFixed(2);  // Avg Distance per Day
-            row.insertCell(6).textContent = `Lat: ${item.home_location[0]}, Lon: ${item.home_location[1]}`;  // Home Location
-            row.insertCell(7).textContent = item.holiday_outing_count || " 0 ";  // Holiday Outing Count
-            row.insertCell(8).textContent = item.total_holiday_outing_time || " 0 ";  // Total Outing Time
-            row.insertCell(9).textContent = (item.stay_locations && Array.isArray(item.stay_locations))
-            ? item.stay_locations.flat()  // 이중 배열이 있다면 평탄화
-                .filter(loc => loc.visit_count >= 1)  // 방문 횟수 2 이상만 필터링
-                .map(loc => `${loc.category_name || "Unknown"} - 머문 시간: ${Math.floor(loc.total_time / 60)} 위치: "${loc.latitude}, ${loc.longitude}"`)
-                .join(', ')
-            : "0";
-        
-     //       row.insertCell(10).textContent = Array.isArray(movement_pattern)
-       //     ? movementData
-         //       .map(m => `${m.category_name || "Unknown"} - ${Math.floor(m.total_time / 60)}분 위치: "${m.latitude}, ${m.longitude}"`)
-           //     .join(', ')
-           // : "0";
-            
-          });
+        paginatedData.forEach(item => {
+            const row = tableBody.insertRow();
+
+            row.insertCell(0).textContent = item.subject_no || "";
+            row.insertCell(1).textContent = item.display_no || "";
+            row.insertCell(2).textContent = item.initial_name || "";
+            row.insertCell(3).textContent = item.total_distance?.toFixed(2) || "0.00";
+
+            const startDate = item.start_date || "Not Available";
+            const endDate = item.end_date || "Not Available";
+            const uniqueDates = item.unique_dates || "0";
+            row.insertCell(4).innerHTML = `${uniqueDates}<br>( Start Date: ${startDate}<br>End Date: ${endDate} )`;
+
+            // 디지털활동반경 (평균 이동 거리)
+            row.insertCell(5).textContent = item.average_distance_per_day ? `${item.average_distance_per_day.toFixed(2)} km` : "";
+            row.insertCell(6).textContent = item.home_location ? `Lat: ${item.home_location[0]}, Lon: ${item.home_location[1]}` : "";
+            row.insertCell(7).textContent = item.holiday_outing_count || "0";
+            row.insertCell(8).textContent = item.total_holiday_outing_time || "0";
+
+            // 디지털 이동 다양성
+            row.insertCell(9).innerHTML = renderLocationList(item.stay_locations);
+
+            // 디지털 이동 규칙성
+            const movementPattern = renderLocationList(item.movement_pattern);
+            row.insertCell(10).innerHTML = movementPattern;
+        });
+
+        updatePaginationButtons(data.length);
     }
 
+    function updatePaginationButtons(totalRows) {
+        const totalPages = Math.ceil(totalRows / rowsPerPage);
+        const paginationDiv = document.getElementById("pagination");
+        paginationDiv.innerHTML = "";
+    
+        for (let i = 1; i <= totalPages; i++) {
+            const button = document.createElement("button");
+            button.textContent = i;
+            button.classList.toggle("active", i === currentPage);
+            button.onclick = () => {
+                currentPage = i;
+                getGpsData(); // 페이지 변경 시 다시 데이터 요청
+            };
+            paginationDiv.appendChild(button);
+        }
+    }
+    
     function filterTable() {
         const searchValue = document.getElementById("searchInput").value.toLowerCase();
-        const filteredData = globalData.filter(item => item.subject_no.toString().includes(searchValue));
+        const filteredData = globalData.filter(item =>
+            item.subject_no?.toString().toLowerCase().includes(searchValue)
+        );
+        currentPage = 1;
         populateTable(filteredData);
     }
-
-    window.onload = async function() {
-        await getGpsData();
-    };
+    window.onload = getGpsData;
 </script>
 
 </body>
