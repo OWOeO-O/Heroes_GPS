@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>GPS Data Analysis</title>
     <link rel="stylesheet" type="text/css" href="test.css">
 </head>
@@ -20,8 +20,8 @@
     <table id="data-table">
         <thead>
             <tr>
-                <th>Subject No</th>      <th>Display No</th>
-                <th>Initial Name</th>    <th>총 이동거리 (km)</th>
+                <th>Subject No</th> <th>Display No</th>
+                <th>Initial Name</th> <th>총 이동거리 (km)</th>
                 <th>날짜 수 <br>(일)</th>
                 <th>[디지털활동반경] <br>(일 별 ) (km)</th>
                 <th>Home Location (Lat/Lon)</th>
@@ -41,29 +41,100 @@
     let currentPage = 1;
     const rowsPerPage = 10;
     let totalItems = 0;
-    // let globalData = [];
-    // let currentPage = 1;
-    // const rowsPerPage = 10;
+    let globalData = [];
 
     async function getGpsData() {
         try {
+            // ✅ 로딩 표시
             document.getElementById("loading").style.display = "block";
     
-            const response = await fetch(`http://127.0.0.1:8001/gps-data?limit=${rowsPerPage}&offset=${(currentPage - 1) * rowsPerPage}`);
+            // ✅ 버튼 비활성화 (중복 클릭 방지)
+            document.querySelectorAll("#pagination button").forEach(btn => btn.disabled = true);
+    
+            const response = await fetch(`http://127.0.0.1:8001/gps-data?page=${currentPage}&size=${rowsPerPage}`);
             const data = await response.json();
     
             globalData = data.result || [];
-            totalItems = data.total_count; // FastAPI에서 총 개수 반환
+            totalItems = data.total_count || 0;
     
             populateTable(globalData);
             updatePaginationButtons(totalItems);
+    
+            // ✅ 로딩 끝났을 때
             document.getElementById("loading").style.display = "none";
+            document.querySelectorAll("#pagination button").forEach(btn => btn.disabled = false);
+    
         } catch (error) {
             console.error("Error fetching GPS data:", error);
             document.getElementById("loading").innerText = "데이터를 불러오는 중 오류가 발생했습니다.";
         }
     }
     
+    
+    
+
+    function populateTable(data) {
+        const tableBody = document.getElementById("data-table").getElementsByTagName("tbody")[0];
+        tableBody.innerHTML = "";
+
+        data.forEach(item => {
+            const row = tableBody.insertRow();
+            row.insertCell(0).textContent = item.subject_no || "";
+            row.insertCell(1).textContent = item.display_no || "";
+            row.insertCell(2).textContent = item.initial_name || "";
+            row.insertCell(3).textContent = item.total_distance?.toFixed(2) || "0.00";
+            const analysisPeriod = item.analysis_period || {};
+
+            function getSafeDate(value) {
+                return value && value.trim ? value : "Not Available";
+            }
+            
+            const startDate = getSafeDate(analysisPeriod.visit_start_date);
+            const endDate = getSafeDate(analysisPeriod.visit_end_date);
+            const durationDays = analysisPeriod.duration_days || "0";
+            
+            // 기존대로 표에 채우기
+            row.insertCell(4).innerHTML = `${item.unique_dates || "0"}<br>( Start Date: ${startDate}<br>End Date: ${endDate} )`;
+            
+            row.insertCell(5).textContent = item.average_distance_per_day
+                ? `${item.average_distance_per_day.toFixed(2)} km`
+                : "";
+            
+            row.insertCell(6).textContent = item.home_location
+                ? `Lat: ${item.home_location[0]}, Lon: ${item.home_location[1]}`
+                : "";
+            
+            // 7번째 셀: 주말 외출 횟수 + 전체 기간 일수
+            row.insertCell(7).innerHTML = `${item.holiday_outing_count || "0"}회<br>(총 ${durationDays}일)`;
+
+            row.insertCell(8).textContent = item.total_holiday_outing_time || "0";
+            
+            // 이동 다양성
+            let stayLocations = item.stay_locations;
+            if (typeof stayLocations === "string") {
+                try {
+                    stayLocations = JSON.parse(stayLocations);
+                } catch (e) {
+                    console.error("Invalid stay_locations JSON", stayLocations);
+                    stayLocations = [];
+                }
+            }
+            row.insertCell(9).innerHTML = renderLocationList(stayLocations);
+
+            // 이동 규칙성
+            let movementPattern = item.movement_pattern;
+            if (typeof movementPattern === "string") {
+                try {
+                    movementPattern = JSON.parse(movementPattern);
+                } catch (e) {
+                    console.error("Invalid movement_pattern JSON", movementPattern);
+                    movementPattern = [];
+                }
+            }
+            row.insertCell(10).innerHTML = renderLocationList(movementPattern);
+        });
+    }
+
     function renderLocationList(locations) {
         if (!locations || !Array.isArray(locations)) return "0";
         const flatLocations = Array.isArray(locations[0]) ? locations.flat() : locations;
@@ -85,32 +156,35 @@
             acc[category].totalTime += loc.total_time;
             acc[category].totalDistance += loc.total_distance;
             acc[category].count += 1;
-            acc[category].visitDays.add(loc.date); 
+            acc[category].visitDays.add(loc.date);
             return acc;
         }, {});
     
-        // 각 카테고리를 리스트 형태로 표시
-        const categoryDetails = Object.keys(categoryData).map(category => {
+        const categoryDetails = Object.keys(categoryData).map((category, idx) => {
             const { totalTime, totalDistance, count, visitDays } = categoryData[category];
-            const avgDistanceInKm = totalDistance / count; // 하루 평균 이동 거리 계산
+            const avgDistanceInKm = totalDistance / count;
             const distance = avgDistanceInKm.toFixed(2);
     
-            const avgTimeInMinutes = Math.floor(totalTime / count / 60); // 평균 시간 계산
+            const avgTimeInMinutes = Math.floor(totalTime / count / 60);
             const hours = Math.floor(avgTimeInMinutes / 60);
             const minutes = avgTimeInMinutes % 60;
             const time = hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`;
     
             const visitDaysCount = visitDays.size;
     
-            const avgDailyTimeInMinutes = Math.floor(totalTime / visitDaysCount / 60); // 하루 평균 머문 시간 계산
+            const avgDailyTimeInMinutes = Math.floor(totalTime / visitDaysCount / 60);
             const dailyHours = Math.floor(avgDailyTimeInMinutes / 60);
             const dailyMinutes = avgDailyTimeInMinutes % 60;
             const dailyTime = dailyHours > 0 ? `${dailyHours}시간 ${dailyMinutes}분` : `${dailyMinutes}분`;
     
+            // 동그라미 숫자 유니코드 (1~20까지만 처리)
+            const circleNumbers = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"];
+            const circleNumber = circleNumbers[idx] || `${idx + 1}.`;
+    
             return `
                 <li>
-                    <strong>${category}</strong><br>
-                    🕒 평균 시간: ${time}<br>
+                    <strong>${circleNumber} ${category}</strong><br>
+                    🕒 시간: ${time}<br>
                     🔢 방문 횟수: ${count}회<br>
                     📅 방문 일수: ${visitDaysCount}일<br>
                     🗓 하루 평균 머문 시간: ${dailyTime} (일 평균)
@@ -118,48 +192,10 @@
             `;
         }).join('');
     
-        return `<ul>${categoryDetails}</ul>`;  // 리스트로 감싸기
+        return `<ul>${categoryDetails}</ul>`;
     }
     
-
-    function populateTable(data) {
-        const tableBody = document.getElementById("data-table").getElementsByTagName("tbody")[0];
-        tableBody.innerHTML = "";
-
-        const startIndex = (currentPage - 1) * rowsPerPage;
-        const paginatedData = data.slice(startIndex, startIndex + rowsPerPage);
-
-        paginatedData.forEach(item => {
-            const row = tableBody.insertRow();
-
-            row.insertCell(0).textContent = item.subject_no || "";
-            row.insertCell(1).textContent = item.display_no || "";
-            row.insertCell(2).textContent = item.initial_name || "";
-            row.insertCell(3).textContent = item.total_distance?.toFixed(2) || "0.00";
-
-            const startDate = item.start_date || "Not Available";
-            const endDate = item.end_date || "Not Available";
-            const uniqueDates = item.unique_dates || "0";
-            row.insertCell(4).innerHTML = `${uniqueDates}<br>( Start Date: ${startDate}<br>End Date: ${endDate} )`;
-
-            // 디지털활동반경 (평균 이동 거리)
-            row.insertCell(5).textContent = item.average_distance_per_day ? `${item.average_distance_per_day.toFixed(2)} km` : "";
-            row.insertCell(6).textContent = item.home_location ? `Lat: ${item.home_location[0]}, Lon: ${item.home_location[1]}` : "";
-            row.insertCell(7).textContent = item.holiday_outing_count || "0";
-            row.insertCell(8).textContent = item.total_holiday_outing_time || "0";
-
-            // 디지털 이동 다양성
-            row.insertCell(9).innerHTML = renderLocationList(item.stay_locations);
-
-            // 디지털 이동 규칙성
-            const movementPattern = renderLocationList(item.movement_pattern);
-            row.insertCell(10).innerHTML = movementPattern;
-        });
-
-        updatePaginationButtons(data.length);
-    }
-
-    function updatePaginationButtons(totalRows) {
+    function updatePaginationButtons(totalRows, dataSource = null) {
         const totalPages = Math.ceil(totalRows / rowsPerPage);
         const paginationDiv = document.getElementById("pagination");
         paginationDiv.innerHTML = "";
@@ -170,20 +206,41 @@
             button.classList.toggle("active", i === currentPage);
             button.onclick = () => {
                 currentPage = i;
-                getGpsData(); // 페이지 변경 시 다시 데이터 요청
+    
+                  // 📌 테이블 위로 스크롤!
+             document.getElementById("data-table").scrollIntoView({ behavior: "smooth", block: "start" });
+
+            if (dataSource) {
+                const start = (currentPage - 1) * rowsPerPage;
+                 const end = start + rowsPerPage;
+                 const pageData = dataSource.slice(start, end);
+                     populateTable(pageData);
+                    updatePaginationButtons(totalRows, dataSource);
+          } else {
+             getGpsData();
+                }
             };
             paginationDiv.appendChild(button);
         }
     }
     
+
     function filterTable() {
         const searchValue = document.getElementById("searchInput").value.toLowerCase();
         const filteredData = globalData.filter(item =>
             item.subject_no?.toString().toLowerCase().includes(searchValue)
         );
+    
         currentPage = 1;
-        populateTable(filteredData);
+        totalItems = filteredData.length;
+    
+        // 필터된 데이터에서 currentPage에 맞는 부분만 보여줌
+        const paginatedData = filteredData.slice(0, rowsPerPage);
+        populateTable(paginatedData);
+        updatePaginationButtons(totalItems, filteredData);
     }
+    
+
     window.onload = getGpsData;
 </script>
 

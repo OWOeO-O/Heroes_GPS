@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, Float, DateTime, String
+from sqlalchemy import func, create_engine, Column, Integer, Float, DateTime, String
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
 import pandas as pd
@@ -13,9 +13,8 @@ load_dotenv()
 
 # API 키 로드
 KAKAO_API_KEY = os.getenv("KAKAO_API_KEY")
-KAKAO_API_URL = "https://dapi.kakao.com/v2/local/search/category.json"
+KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
 KAKAO_COORD_URL = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
-# 요청 헤더
 HEADERS = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
 # FastAPI 설정
 app = FastAPI()
@@ -47,6 +46,15 @@ class Subject(Base):
     no = Column(Integer, primary_key=True, index=True)
     display_no = Column(String)
     initial_name = Column(String)
+
+# Subject_visit 테이블
+table_visit = 'subject_visit'
+class Visit(Base):
+    __tablename__ = table_visit
+    subject_no = Column(Integer, primary_key=True, index=True)
+    visit_round = Column(Integer, primary_key=True, index=True)
+    visit_start_date = Column(Integer)
+    visit_end_date = Column(Integer)
 # DB 세션 생성
 def get_db():
     db = SessionLocal()
@@ -90,22 +98,56 @@ def get_address_from_coordinates(lat, lng):
         return "UNKNOWN"
     return "UNKNOWN"
 
+# @app.get("/visit-summary")
+# async def get_visit_summary():
+#     # 세션 시작
+#     session = SessionLocal()
+#
+#     result = session.query(
+#     Visit.subject_no,
+#     func.min(Visit.visit_start_date).label('visit_start_date'),
+#     func.max(Visit.visit_end_date).label('visit_end_date')
+#     ).group_by(Visit.subject_no).all()
+#
+#     data = [
+#         {
+#             "subject_no": row[0],
+#             "visit_start_date": row[1],
+#             "visit_end_date": row[2]
+#         }
+#         for row in result
+#     ]
+#
+#     # 세션 종료, 데이터 반환
+#     session.close()
+#     return data
+
 # Stay Locations 변환 - 1) category 2) address 변환
 def update_locations_with_field(locations, field_name, fetch_func):
     for location in locations:
         location[field_name] = fetch_func(location["latitude"], location["longitude"])
     return locations
+
 # Stay Locations -> 1) category 변환
 def update_stay_locations_with_category(stay_locations):
     return update_locations_with_field(stay_locations, "category", fetch_kakao_category)
+
 # Movement pattern 및 regular hours → 2) address 변환
 def update_locations_with_address(locations):
     return update_locations_with_field(locations, "address", get_address_from_coordinates)
+
 # 개별 subject_no 처리 (좌표 변환 적용)
-def process_subject(subject_no):
+def process_subject(subject_no, start_date=None, end_date=None):
     db = SessionLocal()
     gps_data = get_gps_data_with_display_no(db, subject_no)
     df = pd.DataFrame(gps_data, columns=['subject_no', 'collected_time', 'latitude', 'longitude', 'display_no', 'initial_name'])
+
+    #subject_no 값으로 visit 정보 가져오기
+    subject_visit = get_visit_data(db, subject_no)
+
+    # subject_visit 객체에서 visit_start_date와 visit_end_date 속성으로 접근
+    visit_start_date = subject_visit.visit_start_date
+    visit_end_date = subject_visit.visit_end_date
 
     if df.empty:
         return None
@@ -114,37 +156,39 @@ def process_subject(subject_no):
     total_distance = df['distance_km'].sum()
     unique_dates = df['collected_time'].dt.date.nunique()
     avg_distance = total_distance / unique_dates if unique_dates else 0
+    stay_locs = group_similar_locations(get_stay_locations(df))
+    stay_locs = update_stay_locations_with_category(stay_locs)
 
-    # Get the start and end date of collected_time
-    start_date = df['collected_time'].min().date()
-    end_date = df['collected_time'].max().date()
+    # 날짜 범위 필터링 (start_date, end_date 주어지면)
+    if start_date:
+        df = df[df['collected_time'] >= pd.to_datetime(start_date)]
+    if end_date:
+        df = df[df['collected_time'] <= pd.to_datetime(end_date)]
+    stay_locs = group_similar_locations(get_stay_locations(df))
+    stay_locs = update_stay_locations_with_category(stay_locs)
+
+    pattern = analyze_movement_pattern(df)
+    pattern["movement_pattern"] = update_locations_with_address(pattern["movement_pattern"])
+    pattern["regular_hours_locations"] = update_locations_with_address(pattern["regular_hours_locations"])
 
     home_location = get_home_location(df)
     outing_count, total_outing_time = calculate_holiday_outing(df)
-    stay_locations = get_stay_locations(df)
     stay_locations_grouped = group_similar_locations(stay_locations)
-    movement_pattern = analyze_movement_pattern(df)
-    # Stay Locations: category update
-    stay_locations_grouped = update_stay_locations_with_category(stay_locations_grouped)
-    # Movement Pattern & Regular Hours: address update
-    movement_pattern_data = update_locations_with_address(movement_pattern.get("movement_pattern", []))
-    regular_hours_locations = update_locations_with_address(movement_pattern.get("regular_hours_locations", []))
+    movement_pattern_data = pattern["movement_pattern"]
+    regular_hours_locations = pattern["regular_hours_locations"]
 
     return {
-        "subject_no": subject_no,
-        "display_no": df['display_no'].iloc[0],
-        "initial_name": df['initial_name'].iloc[0],
-        "total_distance": total_distance,
-        "unique_dates": unique_dates,
-        "start_date": start_date,
-        "end_date": end_date,
-        "average_distance_per_day": avg_distance,
-        "home_location": home_location or "",
-        "holiday_outing_count": outing_count or "",
+        "subject_no": subject_no,"display_no": df['display_no'].iloc[0],
+        "initial_name": df['initial_name'].iloc[0], "total_distance": total_distance,
+        "unique_dates": unique_dates, "average_distance_per_day": avg_distance,
+        "home_location": home_location or "", "holiday_outing_count": outing_count or "",
         "total_holiday_outing_time": total_outing_time or "",
         "stay_locations": stay_locations_grouped,  # category 변환 데이터
+        "stay_locations_grouped": stay_locs,  # 그룹화 장소
         "movement_pattern": movement_pattern_data,  # 주소 변환된 데이터
-        "regular_hours_locations": regular_hours_locations  # 주소 변환된 데이터
+        "regular_hours_locations": regular_hours_locations,  # 주소 변환된 데이터
+        "visit_start_date": visit_start_date,
+        "visit_end_date": visit_end_date
     }
 
 # GPS 데이터 조회
@@ -157,7 +201,24 @@ def get_gps_data_with_display_no(db: Session, subject_no: int):
         .filter(GpsData.subject_no == subject_no) \
         .all()
 
-# 3분 이상 머문 장소 조회 + category mapping
+# visit_start_date & visit_end_date 조회
+def get_visit_data_subject_no(db: Session, subject_no: int):
+    # 첫 번째 결과만 가져옴 (기본적으로 하나의 방문 정보만 존재한다고 가정)
+    return db.query(
+        Visit.subject_no, Visit.visit_start_date, Visit.visit_end_date
+    ).filter(Visit.subject_no == subject_no).first()
+
+# GPS 데이터 조회
+def get_gps_data_with_display_no(db: Session, subject_no: int):
+    return db.query(
+        GpsData.subject_no, GpsData.collected_time, GpsData.latitude, GpsData.longitude,
+        Subject.display_no, Subject.initial_name
+    ) \
+        .join(Subject, Subject.no == GpsData.subject_no) \
+        .filter(GpsData.subject_no == subject_no) \
+        .all()
+
+# 3분 이상 머문 장소 조회 + 카테고리 매핑
 def get_stay_locations(df):
     df['time_diff'] = df['collected_time'].diff().dt.total_seconds().fillna(0)
     stays = df[df['time_diff'] >= 180]
@@ -169,9 +230,21 @@ def get_stay_locations(df):
 
     # 각 좌표 category 조회
     stay_locations["category"] = [fetch_kakao_category(lat, lon) for lat, lon in zip(stay_locations["latitude"], stay_locations["longitude"])]
-    return stay_locations.to_dict(orient='records')# 개별 subject_no 처리
-def process_subject(subject_no):
+    return stay_locations.to_dict(orient='records')
+
+# subject_no 처리 (좌표 변환 적용)
+def process_subject(subject_no, start_date=None, end_date=None):
     db = SessionLocal()
+
+    # visit 정보 가져오기
+    visit_info = get_visit_data_subject_no(db, subject_no)
+
+    if visit_info:
+        visit_start_date, visit_end_date = visit_info[1], visit_info[2]
+    else:
+        visit_start_date, visit_end_date = None, None
+
+    # GPS 데이터 조회
     gps_data = get_gps_data_with_display_no(db, subject_no)
     df = pd.DataFrame(gps_data,
                       columns=['subject_no', 'collected_time', 'latitude', 'longitude', 'display_no', 'initial_name'])
@@ -180,19 +253,52 @@ def process_subject(subject_no):
         return None
 
     df['collected_time'] = pd.to_datetime(df['collected_time'])
+
+    # 날짜 범위 필터링 (start_date, end_date 주어지면)
+    if start_date:
+        df = df[df['collected_time'] >= pd.to_datetime(start_date)]
+    if end_date:
+        df = df[df['collected_time'] <= pd.to_datetime(end_date)]
+
+    # Stay Locations
     stay_locations = get_stay_locations(df)
+
+    # 이동 거리, 평균 거리 계산
+    total_distance = df['distance_km'].sum()
+    unique_dates = df['collected_time'].dt.date.nunique()
+    avg_distance = total_distance / unique_dates if unique_dates else 0
+
+    # 이동 패턴 분석
+    pattern = analyze_movement_pattern(df)
+    pattern["movement_pattern"] = update_locations_with_address(pattern["movement_pattern"])
+    pattern["regular_hours_locations"] = update_locations_with_address(pattern["regular_hours_locations"])
+
+    # 집 위치와 외출 시간 분석
+    home_location = get_home_location(df)
+    outing_count, total_outing_time = calculate_holiday_outing(df)
 
     return {
         "subject_no": subject_no,
         "display_no": df['display_no'].iloc[0],
         "initial_name": df['initial_name'].iloc[0],
-        "stay_locations": stay_locations
+        "total_distance": total_distance,
+        "unique_dates": unique_dates,
+        "average_distance_per_day": avg_distance,
+        "home_location": home_location or "",
+        "holiday_outing_count": outing_count or "",
+        "total_holiday_outing_time": total_outing_time or "",
+        "stay_locations": stay_locations,
+        "movement_pattern": pattern["movement_pattern"],
+        "regular_hours_locations": pattern["regular_hours_locations"],
+        "visit_start_date": visit_start_date,
+        "visit_end_date": visit_end_date
     }
 
 # 기본 endpoint 추가
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the FastAPI application!"}
+
 
 # haversine 공식 (거리 계산)
 def haversine(lat1, lon1, lat2, lon2):
@@ -203,12 +309,10 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
     c = 2 * atan2(sqrt(a), sqrt(1 - a))
     return R * c  # 거리 (km)
-
 # DB 서 GPS 데이터 (Subject 테이블 조인)
 def get_gps_data_with_display_no(db: Session, subject_no: int):
     gps_data = db.query(
-        GpsData.subject_no, GpsData.collected_time, GpsData.latitude, GpsData.longitude,
-        Subject.display_no, Subject.initial_name  # initial_name 추가
+        GpsData.subject_no, GpsData.collected_time, GpsData.latitude, GpsData.longitude, Subject.display_no, Subject.initial_name  # initial_name 추가
     ) \
         .join(Subject, Subject.no == GpsData.subject_no) \
         .filter(GpsData.subject_no == subject_no) \
@@ -217,7 +321,6 @@ def get_gps_data_with_display_no(db: Session, subject_no: int):
 
 # 집 위치 추정 (오후 10시 이후, 가장 많이 머문 장소)
 def get_home_location(df):
-    # 10시 이후에 가장 많이 머문 장소 찾기
     df_filtered = df[df['collected_time'].dt.hour >= 22]
     return df_filtered.groupby(['latitude', 'longitude']).size().idxmax() if not df_filtered.empty else None # 10시 이후 데이터 없을 경우 None 반환
 
@@ -277,28 +380,11 @@ def fetch_kakao_place(lat, lon, api_key, radius=50):
     return "Unknown"
 
 CATEGORY_MAP = {
-    "MT1": "대형마트",
-    "CS2": "편의점",
-    "PS3": "어린이집, 유치원",
-    "SC4": "학교",
-    "AC5": "학원",
-    "PK6": "주차장",
-    "OL7": "주유소, 충전소",
-    "SW8": "지하철역",
-    "BK9": "은행",
-    "CT1": "문화시설",
-    "AG2": "중개업소",
-    "PO3": "공공기관",
-    "AT4": "관광명소",
-    "AD5": "숙박",
-    "FD6": "음식점",
-    "CE7": "카페",
-    "HP8": "병원",
-    "PM9": "약국"
+    "MT1": "대형마트","CS2": "편의점", "PS3": "어린이집, 유치원", "SC4": "학교", "AC5": "학원", "PK6": "주차장", "OL7": "주유소, 충전소", "SW8": "지하철역", "BK9": "은행", "CT1": "문화시설", "AG2": "중개업소", "PO3": "공공기관",
+    "AT4": "관광명소", "AD5": "숙박", "FD6": "음식점", "CE7": "카페", "HP8": "병원", "PM9": "약국"
 }
 
 def fetch_kakao_category(lat, lon, api_key, radius=50):
-    """좌표를 기반으로 카카오 카테고리 코드 조회"""
     url = "https://dapi.kakao.com/v2/local/search/category.json"
     headers = {"Authorization": f"KakaoAK {api_key}"}
     category_codes = ["MT1", "CS2", "PS3", "SC4", "AC5", "PK6", "OL7", "SW8", "BK9", "CT1",
@@ -306,7 +392,6 @@ def fetch_kakao_category(lat, lon, api_key, radius=50):
 
     nearest_place = None  # 가장 가까운 장소 저장
     min_distance = float('inf')  # 최소 거리 초기값 (무한대)
-
     for category in category_codes:  # ✅ 모든 카테고리 조회
         params = {"x": lon, "y": lat, "radius": radius, "category_group_code": category}
         response = requests.get(url, headers=headers, params=params, timeout=10)
@@ -325,7 +410,7 @@ def fetch_kakao_category(lat, lon, api_key, radius=50):
                         min_distance = distance
                         nearest_place = place
         else:
-            print(response)
+            print(f"Error fetching category: {response.status_code}")
 
     if nearest_place:
         return nearest_place.get("category_group_code", "Unknown")  # ✅ 가장 가까운 장소 category 코드 반환
@@ -342,15 +427,14 @@ def analyze_category(df):
 
     #filtered_df = [entry for entry in flat_list if entry['visit_count'] >= 2]
     api_key = '5da0a8d703e9ce95613b74b7e10fb2fa'
-    # 카카오 API 통해 장소 정보 추가
+    # 카카오 API - 장소 정보 추가
     if api_key:
         for entry in top_5:
             category_code = fetch_kakao_category(entry["latitude"], entry["longitude"], api_key)  # 카테고리 코드 가져오기
-            entry["category_code"] = category_code  # ✅ 카테고리 코드 추가
+            entry["category_code"] = category_code
             entry["category_name"] = CATEGORY_MAP.get(category_code, "기타")
     return top_5
-
-# 이동 규칙성(특정시간대)
+# 이동 규칙성(특정시간)
 def analyze_movement_pattern(df):
     # 30분 단위로 그룹화 (0~23시간 + 0~30분 / 30~59분)
     df['half_hour'] = df['collected_time'].dt.hour * 2 + (df['collected_time'].dt.minute >= 30).astype(int)
@@ -386,7 +470,6 @@ def process_subject(subject_no, db):
         return None  # 데이터 없는 경우 처리
 
     df['collected_time'] = pd.to_datetime(df['collected_time'])
-    # 이동 거리 계산
     df['prev_latitude'] = df['latitude'].shift(1)
     df['prev_longitude'] = df['longitude'].shift(1)
     df['distance_km'] = df.apply(
@@ -411,10 +494,43 @@ def process_subject(subject_no, db):
     outing_count = outing_count if outing_count is not None else ""
     total_outing_time = total_outing_time if total_outing_time is not None else ""
 
-    # Stay locations, Movement pattern 대해 빈 값 처리
-    # stay_locations = stay_locations if stay_locations else []
-    # movement_pattern_data = movement_pattern.get("movement_pattern", [])
-    # regular_hours_locations = movement_pattern.get("regular_hours_locations", [])
+    def get_weekend_outing_info(df):
+        if not pd.api.types.is_datetime64_any_dtype(df['collected_time']):
+            df['collected_time'] = pd.to_datetime(df['collected_time'], errors='coerce')
+        df = df.dropna(subset=['collected_time'])
+
+        # 요일 컬럼 추가
+        df['weekday'] = df['collected_time'].dt.dayofweek  # Monday=0, Sunday=6
+        weekend_df = df[df['weekday'] >= 5]  # 5=Saturday, 6=Sunday
+
+        if weekend_df.empty:
+            return {
+                "total_weekend_outing_time": 0,
+                "weekend_days_count": 0,
+                "avg_outing_time_per_day": 0,
+                "most_common_outing_day": None
+            }
+
+        # 일별로 머문 시간 계산 (외출 시간 계산 방식은 stay 기준 또는 머무른 시간 합산 등 사용자 정의 가능), 예: 하루 머문 시간 합 = "외출 시간"으로 정의
+        outing_by_date = weekend_df.groupby(weekend_df['collected_time'].dt.date).size()
+        weekend_days_count = outing_by_date.shape[0]
+        # 총 외출 시간: 임의로 1 point = 1분 가정 (실제는 머무른 시간 합산 로직으로 대체 가능)
+        total_weekend_outing_time = outing_by_date.sum()  # 단위: 분이라고 가정
+        avg_outing_time_per_day = total_weekend_outing_time / weekend_days_count if weekend_days_count > 0 else 0
+
+        # 가장 자주 외출한 요일
+        most_common_day = weekend_df['weekday'].mode().iloc[0]
+        weekday_map = {5: 'Saturday', 6: 'Sunday'}
+        most_common_outing_day = weekday_map.get(most_common_day, None)
+        # start_date = collected_time.
+        # end_date =
+
+        return {
+            "total_weekend_outing_time": int(total_weekend_outing_time),
+            "weekend_days_count": int(weekend_days_count),
+            "avg_outing_time_per_day": round(avg_outing_time_per_day, 2),
+            "most_common_outing_day": most_common_outing_day
+        }
 
     def main():
         db = SessionLocal()
@@ -436,32 +552,48 @@ def process_subject(subject_no, db):
         "holiday_outing_count": outing_count,
         "total_holiday_outing_time": total_outing_time,
         "stay_locations": stay_locations_category,  # 유사한 장소 그룹화 리스트
-        "movement_pattern": movement_pattern
-        # "regular_hours_locations": regular_hours_locations
+        "movement_pattern": movement_pattern,
+        "visit_start_date": visit_start_date,
+        "visit_end_date": visit_end_date
+
+        # "analysis_period"
+        # # "regular_hours_locations": regular_hours_locations
     }
 
 @app.get("/gps-data")
 def get_processed_gps_data(
-    request: Request,  # 🛠️ request서 직접 query parameter 가져오기
+    request: Request,
     db: Session = Depends(get_db)
 ):
-    params = request.query_params  # 모든 쿼리 파라미터 가져오기
-    limit = int(params.get("limit", 5))  # 기본값 5
-    offset = int(params.get("offset", 0))  # 기본값 0
+    # 쿼리 파라미터 추출
+    params = request.query_params
+    page = int(params.get("page", 1))   # 기본값 1
+    size = int(params.get("size", 10))  # 기본값 10
+    offset = (page - 1) * size          # offset 계산
+    # 전체 subject_no 개수 먼저 구함 (distinct count!)
 
+    total_count = db.query(func.count(func.distinct(GpsData.subject_no))).scalar()
+    # 데이터 조회
     subjects = (
         db.query(GpsData.subject_no)
         .distinct()
-        .offset(offset)  # 🛠️ offset 적용
-        .limit(limit)    # 🛠️ limit 적용
+        .offset(offset)
+        .limit(size)
         .all()
     )
 
     subject_nos = [subject[0] for subject in subjects]
     results = [process_subject(subject_no, db) for subject_no in subject_nos]
 
-    return {"result": results}
-        # with ProcessPoolExecutor() as executor:
+    return {
+        "page": page,
+        "size": size,
+        "count": len(results),  # 현재 페이지 아이템 수
+        "total_count": total_count,  # ✅ 전체 subject 수 (프론트용)
+        "result": results
+    }
+
+    # with ProcessPoolExecutor() as executor:
     # Stay Locations 좌표를 카카오 API 통해 category 코드로 변환
     # for res in results:
     #     if res is not None:
