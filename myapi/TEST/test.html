@@ -47,7 +47,6 @@
         try {
             // ✅ 로딩 표시
             document.getElementById("loading").style.display = "block";
-    
             // ✅ 버튼 비활성화 (중복 클릭 방지)
             document.querySelectorAll("#pagination button").forEach(btn => btn.disabled = true);
     
@@ -56,22 +55,17 @@
     
             globalData = data.result || [];
             totalItems = data.total_count || 0;
-    
             populateTable(globalData);
             updatePaginationButtons(totalItems);
     
-            // ✅ 로딩 끝났을 때
+            // ✅ 로딩 끝 
             document.getElementById("loading").style.display = "none";
             document.querySelectorAll("#pagination button").forEach(btn => btn.disabled = false);
-    
         } catch (error) {
             console.error("Error fetching GPS data:", error);
             document.getElementById("loading").innerText = "데이터를 불러오는 중 오류가 발생했습니다.";
         }
     }
-    
-    
-    
 
     function populateTable(data) {
         const tableBody = document.getElementById("data-table").getElementsByTagName("tbody")[0];
@@ -84,16 +78,13 @@
             row.insertCell(2).textContent = item.initial_name || "";
             row.insertCell(3).textContent = item.total_distance?.toFixed(2) || "0.00";
             const analysisPeriod = item.analysis_period || {};
-
             function getSafeDate(value) {
                 return value && value.trim ? value : "Not Available";
             }
-            
             const startDate = getSafeDate(analysisPeriod.visit_start_date);
             const endDate = getSafeDate(analysisPeriod.visit_end_date);
             const durationDays = analysisPeriod.duration_days || "0";
-            
-            // 기존대로 표에 채우기
+    
             row.insertCell(4).innerHTML = `${item.unique_dates || "0"}<br>( Start Date: ${startDate}<br>End Date: ${endDate} )`;
             
             row.insertCell(5).textContent = item.average_distance_per_day
@@ -171,7 +162,6 @@
             const time = hours > 0 ? `${hours}시간 ${minutes}분` : `${minutes}분`;
     
             const visitDaysCount = visitDays.size;
-    
             const avgDailyTimeInMinutes = Math.floor(totalTime / visitDaysCount / 60);
             const dailyHours = Math.floor(avgDailyTimeInMinutes / 60);
             const dailyMinutes = avgDailyTimeInMinutes % 60;
@@ -207,7 +197,7 @@
             button.onclick = () => {
                 currentPage = i;
     
-                  // 📌 테이블 위로 스크롤!
+                  // 📌 테이블 위 scroll !
              document.getElementById("data-table").scrollIntoView({ behavior: "smooth", block: "start" });
 
             if (dataSource) {
@@ -223,7 +213,6 @@
             paginationDiv.appendChild(button);
         }
     }
-    
 
     function filterTable() {
         const searchValue = document.getElementById("searchInput").value.toLowerCase();
@@ -234,13 +223,11 @@
         currentPage = 1;
         totalItems = filteredData.length;
     
-        // 필터된 데이터에서 currentPage에 맞는 부분만 보여줌
+        // 필터 O 데이터, currentPage 맞는 부분만 보여줌
         const paginatedData = filteredData.slice(0, rowsPerPage);
         populateTable(paginatedData);
         updatePaginationButtons(totalItems, filteredData);
     }
-    
-
     window.onload = getGpsData;
 </script>
 
